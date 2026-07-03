@@ -1,30 +1,4 @@
-/*
- * deadlock_demo.c
- * ----------------
- * ST5004CEM - Operating Systems and Security
- * Task 1: Process Management and Threading
- *
- * WHAT THIS PROGRAM DOES:
- * Demonstrates the classic two-thread / two-lock deadlock scenario,
- * then demonstrates the fix using consistent lock ordering.
- *
- * Compile with two modes using a preprocessor flag:
- *   gcc -o deadlock_demo deadlock_demo.c -lpthread -DDEMO_UNSAFE
- *   gcc -o deadlock_demo deadlock_demo.c -lpthread            (safe, default)
- *
- * UNSAFE MODE (-DDEMO_UNSAFE):
- *   Thread A locks resource_1 then tries to lock resource_2.
- *   Thread B locks resource_2 then tries to lock resource_1.
- *   If both threads acquire their first lock at roughly the same time,
- *   each waits forever for the lock the other is holding -> DEADLOCK.
- *
- * SAFE MODE (default):
- *   Both threads always acquire locks in the SAME global order
- *   (resource_1 before resource_2). This is the standard "lock
- *   ordering" deadlock-prevention technique: if every thread requests
- *   resources in a fixed order, circular wait (one of the four
- *   necessary conditions for deadlock) can never happen.
- */
+
 
 #include <stdio.h>
 #include <stdlib.h>
