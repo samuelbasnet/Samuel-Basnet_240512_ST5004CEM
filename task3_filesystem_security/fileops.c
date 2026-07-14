@@ -17,9 +17,16 @@
 #include "common.h"
 
 /* Builds the real on-disk path for a logical filename, e.g.
- * "secret.txt" -> "storage/secret.txt". Ensures STORAGE_DIR exists. */
+ * "secret.txt" -> "storage/secret.txt". Ensures STORAGE_DIR exists.
+ * mkdir() has a different signature on Windows (MinGW) vs Linux/Unix:
+ * Windows' mkdir(path) takes no permission-mode argument, while
+ * POSIX mkdir(path, mode) does. */
 static void storage_path(const char *filename, char *out_path, size_t out_size) {
-    mkdir(STORAGE_DIR, 0700);   /* no-op if it already exists */
+#ifdef _WIN32
+    mkdir(STORAGE_DIR);            /* no-op if it already exists */
+#else
+    mkdir(STORAGE_DIR, 0700);      /* no-op if it already exists */
+#endif
     snprintf(out_path, out_size, "%s/%s", STORAGE_DIR, filename);
 }
 
