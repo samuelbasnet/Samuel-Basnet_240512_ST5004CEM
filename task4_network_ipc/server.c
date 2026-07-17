@@ -1,31 +1,27 @@
 /*
- * server.c
- * ---------
+ * server.c (Windows / Winsock version)
+ * --------------------------------------
  * ST5004CEM - Operating Systems and Security
  * Task 4: Network Programming and IPC
  *
- * A multi-threaded TCP server implementing a simple authenticated
- * key-value store protocol (see docs/protocol_doc.md for the full
- * spec). Each client connection is handled on its own pthread, with
- * the shared key-value store protected by a mutex -- the same
- * synchronization pattern used in Task 1.
+ * Same protocol and logic as the POSIX version, ported to Winsock2 so
+ * it compiles natively on Windows with MinGW in VS Code. See
+ * docs/protocol_doc.md for the full protocol spec.
  *
- * COMPILE (Linux / WSL / Ubuntu VM -- requires POSIX sockets):
- *   gcc -Wall -o server server.c -lpthread
+ * COMPILE (Windows, MinGW / VS Code terminal):
+ *   gcc -Wall -o server.exe server.c -lws2_32 -lpthread
  * RUN:
- *   ./server [port]        (default port 5050)
+ *   .\server.exe [port]        (default port 5050)
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <time.h>
 #include <stdarg.h>
+#include <time.h>
+#include <pthread.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 
 #define DEFAULT_PORT     5050
 #define BACKLOG          10
@@ -37,9 +33,7 @@
 
 /* ---------- Hardcoded credentials for this demo ----------
  * In a real system these would be looked up against a proper user
- * database with salted/hashed passwords (as implemented in Task 3).
- * Kept simple here so Task 4 can be tested standalone; the protocol
- * doc explains how this would integrate with Task 3's auth module. */
+ * database with salted/hashed passwords (as implemented in Task 3). */
 typedef struct { const char *username; const char *password; } Credential;
 static const Credential VALID_USERS[] = {
     {"alice", "alicepass"},
@@ -57,9 +51,7 @@ typedef struct {
 static StoreEntry store[MAX_STORE];
 static pthread_mutex_t store_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* ---------- Logging helper (timestamped, thread-safe via stdio's
- * own internal locking on a single stream -- sufficient for this
- * demo's log volume) ---------- */
+/* ---------- Logging helper ---------- */
 static void log_msg(const char *client_desc, const char *fmt, ...) {
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
@@ -84,13 +76,13 @@ static int store_put(const char *key, const char *value) {
             strncpy(store[i].value, value, MAX_VALUE - 1);
             store[i].value[MAX_VALUE - 1] = '\0';
             pthread_mutex_unlock(&store_lock);
-            return 1;   /* updated existing key */
+            return 1;
         }
         if (!store[i].used && free_slot == -1) free_slot = i;
     }
     if (free_slot == -1) {
         pthread_mutex_unlock(&store_lock);
-        return 0;   /* store full */
+        return 0;
     }
     strncpy(store[free_slot].key, key, MAX_KEY - 1);
     store[free_slot].key[MAX_KEY - 1] = '\0';
@@ -143,65 +135,58 @@ static int store_list(char *out_buf, size_t buf_size) {
     return count;
 }
 
-/* ---------- Input validation ----------
- * Rejects empty tokens, tokens exceeding max length, and keys/values
- * containing characters that would break the line-based protocol
- * (spaces in keys, or any control characters). */
+/* ---------- Input validation ---------- */
 static int is_valid_token(const char *s, int max_len) {
     int len = (int)strlen(s);
     if (len == 0 || len > max_len) return 0;
     for (int i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
-        if (c < 32 || c == 127) return 0;   /* reject control characters */
+        if (c < 32 || c == 127) return 0;
     }
     return 1;
 }
 
-/* ---------- Sends a line (adds \n) and checks for a short write. ---------- */
-static void send_line(int sock, const char *msg) {
+/* ---------- Sends a line (adds \n). ---------- */
+static void send_line(SOCKET sock, const char *msg) {
     char buf[MAX_LINE + 2];
     snprintf(buf, sizeof(buf), "%s\n", msg);
-    ssize_t sent = send(sock, buf, strlen(buf), 0);
-    if (sent < 0) {
-        /* Connection likely broken; the read loop will detect this
-         * on its next recv() and clean up. Nothing more to do here. */
-    }
+    send(sock, buf, (int)strlen(buf), 0);
 }
 
 /* ---------- Reads one newline-terminated line from the socket.
  * Returns line length on success, 0 on clean disconnect, -1 on error
- * or if the line exceeds MAX_LINE (protects against unbounded input,
- * a basic defence against malicious/malformed clients). ---------- */
-static int recv_line(int sock, char *out_line, int max_len) {
+ * or if the line exceeds MAX_LINE. ---------- */
+static int recv_line(SOCKET sock, char *out_line, int max_len) {
     int pos = 0;
     char c;
     while (pos < max_len - 1) {
-        ssize_t n = recv(sock, &c, 1, 0);
+        int n = recv(sock, &c, 1, 0);
         if (n == 0) return 0;         /* client disconnected */
         if (n < 0) return -1;         /* socket error */
         if (c == '\n') {
             out_line[pos] = '\0';
-            /* strip a trailing \r for clients that send CRLF */
             if (pos > 0 && out_line[pos - 1] == '\r') out_line[pos - 1] = '\0';
             return pos;
         }
         out_line[pos++] = c;
     }
-    return -1;   /* line too long -- treat as protocol violation */
+    return -1;
 }
 
 /* ---------- Per-client thread ---------- */
 typedef struct {
-    int sock;
+    SOCKET sock;
     struct sockaddr_in addr;
 } ClientArgs;
 
 static void *handle_client(void *arg) {
     ClientArgs *ca = (ClientArgs *)arg;
-    int sock = ca->sock;
+    SOCKET sock = ca->sock;
     char client_desc[64];
+    char ip_str[32];
+    inet_ntop(AF_INET, &ca->addr.sin_addr, ip_str, sizeof(ip_str));
     snprintf(client_desc, sizeof(client_desc), "%s:%d",
-             inet_ntoa(ca->addr.sin_addr), ntohs(ca->addr.sin_port));
+             ip_str, ntohs(ca->addr.sin_port));
     free(ca);
 
     log_msg(client_desc, "connected");
@@ -222,9 +207,8 @@ static void *handle_client(void *arg) {
             send_line(sock, "ERR protocol_violation");
             break;
         }
-        if (n == 0) continue;   /* blank line, ignore */
+        if (n == 0) continue;
 
-        /* ---- tokenize: command word0, then up to 2 more args ---- */
         char cmd[MAX_KEY] = "", arg1[MAX_KEY] = "", arg2[MAX_VALUE] = "";
         sscanf(line, "%63s %63s %399[^\n]", cmd, arg1, arg2);
 
@@ -323,7 +307,7 @@ static void *handle_client(void *arg) {
         }
     }
 
-    close(sock);
+    closesocket(sock);
     log_msg(client_desc, "connection closed");
     return NULL;
 }
@@ -331,30 +315,40 @@ static void *handle_client(void *arg) {
 int main(int argc, char *argv[]) {
     int port = (argc > 1) ? atoi(argv[1]) : DEFAULT_PORT;
 
-    int server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock < 0) {
-        perror("socket");
+    /* Winsock must be initialized before any socket calls. */
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        fprintf(stderr, "WSAStartup failed\n");
         return 1;
     }
 
-    int opt = 1;
-    setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_sock == INVALID_SOCKET) {
+        fprintf(stderr, "socket() failed: %d\n", WSAGetLastError());
+        WSACleanup();
+        return 1;
+    }
+
+    BOOL opt = TRUE;
+    setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(port);
+    server_addr.sin_port = htons((u_short)port);
 
-    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("bind");
-        close(server_sock);
+    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) == SOCKET_ERROR) {
+        fprintf(stderr, "bind() failed: %d\n", WSAGetLastError());
+        closesocket(server_sock);
+        WSACleanup();
         return 1;
     }
 
-    if (listen(server_sock, BACKLOG) < 0) {
-        perror("listen");
-        close(server_sock);
+    if (listen(server_sock, BACKLOG) == SOCKET_ERROR) {
+        fprintf(stderr, "listen() failed: %d\n", WSAGetLastError());
+        closesocket(server_sock);
+        WSACleanup();
         return 1;
     }
 
@@ -363,11 +357,11 @@ int main(int argc, char *argv[]) {
 
     while (1) {
         struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-        int client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_len);
-        if (client_sock < 0) {
-            perror("accept");
-            continue;   /* don't let one bad accept kill the whole server */
+        int client_len = sizeof(client_addr);
+        SOCKET client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_len);
+        if (client_sock == INVALID_SOCKET) {
+            fprintf(stderr, "accept() failed: %d\n", WSAGetLastError());
+            continue;
         }
 
         ClientArgs *ca = malloc(sizeof(ClientArgs));
@@ -376,14 +370,15 @@ int main(int argc, char *argv[]) {
 
         pthread_t tid;
         if (pthread_create(&tid, NULL, handle_client, ca) != 0) {
-            perror("pthread_create");
-            close(client_sock);
+            fprintf(stderr, "pthread_create failed\n");
+            closesocket(client_sock);
             free(ca);
             continue;
         }
-        pthread_detach(tid);   /* clean up thread resources automatically on exit */
+        pthread_detach(tid);
     }
 
-    close(server_sock);
+    closesocket(server_sock);
+    WSACleanup();
     return 0;
 }
