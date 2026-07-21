@@ -11,3 +11,16 @@
 [2026-07-14 23:47:52] user=samuel action=DECRYPT target=test result=SUCCESS
 [2026-07-14 23:48:03] user=samuel action=READ target=test result=SUCCESS
 [2026-07-14 23:48:38] user=samuel action=LOGOUT target=- result=SUCCESS
+[2026-07-21 21:01:15] user=alice action=REGISTER target=alice result=SUCCESS
+[2026-07-21 21:01:43] user=bob action=REGISTER target=bob result=SUCCESS
+[2026-07-21 21:02:04] user=- action=REGISTER target= result=FAILED_INVALID_INPUT
+[2026-07-21 21:02:20] user=alice action=LOGIN target=alice result=SUCCESS
+[2026-07-21 21:02:51] user=alice action=CREATE target=notes.txt result=SUCCESS
+[2026-07-21 21:03:04] user=alice action=LOGOUT target=- result=SUCCESS
+[2026-07-21 21:03:12] user=bob action=LOGIN target=bob result=SUCCESS
+[2026-07-21 21:04:09] user=bob action=WRITE target=notes.txt result=FAILED_PERMISSION_DENIED
+[2026-07-21 21:06:38] user=alice action=LOGIN target=alice result=SUCCESS
+[2026-07-21 21:07:06] user=alice action=ENCRYPT target=notes.txt result=SUCCESS
+[2026-07-21 21:07:28] user=alice action=READ target=notes.txt result=SUCCESS
+[2026-07-21 21:07:45] user=alice action=READ target=notes.txt result=SUCCESS
+[2026-07-21 21:08:14] user=alice action=LOGOUT target=- result=SUCCESS
